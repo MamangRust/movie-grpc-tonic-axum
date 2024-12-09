@@ -16,13 +16,13 @@ cargo run --bin movie-client
 ### 1. List Movies
 
 ```bash
-curl -X GET http://127.0.0.1:3000/movies
+curl -X GET http://127.0.0.1:5000/movies
 ```
 
 ### 2. Create Movie
 
 ```bash
-curl -X POST http://127.0.0.1:3000/movies \
+curl -X POST http://127.0.0.1:5000/movies \
 -H "Content-Type: application/json" \
 -d '{
   "title": "Inception",
@@ -33,13 +33,13 @@ curl -X POST http://127.0.0.1:3000/movies \
 ### 3. Get Movie by ID
 
 ```bash
-curl -X GET http://127.0.0.1:3000/movies/1
+curl -X GET http://127.0.0.1:5000/movies/1
 ```
 
 ### 4. Update Movie
 
 ```bash
-curl -X PUT http://127.0.0.1:3000/movies/1 \
+curl -X PUT http://127.0.0.1:5000/movies/1 \
 -H "Content-Type: application/json" \
 -d '{
   "title": "Interstellar",
@@ -50,5 +50,5 @@ curl -X PUT http://127.0.0.1:3000/movies/1 \
 ### 5. Delete Movie
 
 ```bash
-curl -X DELETE http://127.0.0.1:3000/movies/1
+curl -X DELETE http://127.0.0.1:5000/movies/1
 ```

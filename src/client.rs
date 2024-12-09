@@ -1,35 +1,112 @@
 use axum::{
-    routing::{get, post, put, delete},
-    Router,
-    extract::{State, Path},
-    response::IntoResponse,
-    Json,
+    body::Body,
+    extract::{Path, State},
+    http::{header::CONTENT_TYPE, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
 };
+use movie::movie_service_client::MovieServiceClient;
+use movie::{CreateMovieRequest, DeleteMovieRequest, ReadMovieRequest, UpdateMovieRequest};
+use prometheus_client::encoding::text::encode;
+use prometheus_client::metrics::counter::Counter;
+use prometheus_client::metrics::family::Family;
+use prometheus_client::registry::Registry;
+use prometheus_client_derive_encode::{EncodeLabelSet, EncodeLabelValue};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use serde::{Serialize, Deserialize};
-use tonic::Request;
 use std::sync::Arc;
+use tokio::sync::Mutex;
+use tonic::Request;
 use uuid::Uuid;
 
+use opentelemetry::{
+    global,
+    propagation::Injector,
+    trace::{SpanKind, TraceContextExt, Tracer},
+    Context, KeyValue,
+};
+use opentelemetry_sdk::{propagation::TraceContextPropagator, runtime::Tokio, trace as sdktrace};
+use opentelemetry_stdout::SpanExporter;
+
+// Protobuf generated code
 pub mod movie {
     tonic::include_proto!("movie");
 }
 
-// Import gRPC client
-use movie::movie_service_client::MovieServiceClient;
-use movie::{CreateMovieRequest, ReadMovieRequest, UpdateMovieRequest, DeleteMovieRequest};
-
-#[derive(Clone)]
-struct AppState {
-    grpc_client: Arc<tokio::sync::Mutex<MovieServiceClient<tonic::transport::Channel>>>
+// Metrics-related enums and structs
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelValue)]
+pub enum Method {
+    Get,
+    Post,
+    Put,
+    Delete,
 }
 
-
-fn error_response(code: axum::http::StatusCode, message: &str) -> (axum::http::StatusCode, Json<Value>) {
-    (code, Json(json!({ "error": message })))
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct MethodLabels {
+    pub method: Method,
 }
 
+#[derive(Debug)]
+pub struct Metrics {
+    requests: Family<MethodLabels, Counter>,
+}
 
+impl Metrics {
+    pub fn inc_requests(&self, method: Method) {
+        self.requests.get_or_create(&MethodLabels { method }).inc();
+    }
+}
+
+#[derive(Debug)]
+pub struct AppState {
+    pub registry: Registry,
+    pub grpc_client: Arc<tokio::sync::Mutex<MovieServiceClient<tonic::transport::Channel>>>,
+    pub metrics: Arc<Mutex<Metrics>>,
+}
+
+// Tracing initialization function
+fn init_tracer() -> sdktrace::TracerProvider {
+    global::set_text_map_propagator(TraceContextPropagator::new());
+    let provider = sdktrace::TracerProvider::builder()
+        .with_batch_exporter(SpanExporter::default(), Tokio)
+        .build();
+
+    global::set_tracer_provider(provider.clone());
+    provider
+}
+
+// Metadata map for trace context injection
+struct MetadataMap<'a>(&'a mut tonic::metadata::MetadataMap);
+
+impl<'a> Injector for MetadataMap<'a> {
+    fn set(&mut self, key: &str, value: String) {
+        if let Ok(key) = tonic::metadata::MetadataKey::from_bytes(key.as_bytes()) {
+            if let Ok(val) = tonic::metadata::MetadataValue::try_from(&value) {
+                self.0.insert(key, val);
+            }
+        }
+    }
+}
+
+// Metrics handler for Prometheus
+pub async fn metrics_handler(State(state): State<Arc<Mutex<AppState>>>) -> impl IntoResponse {
+    let state = state.lock().await;
+    let mut buffer = String::new();
+    encode(&mut buffer, &state.registry).unwrap();
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            CONTENT_TYPE,
+            "application/openmetrics-text; version=1.0.0; charset=utf-8",
+        )
+        .body(Body::from(buffer))
+        .unwrap()
+}
+
+// Existing input and response structs
 #[derive(Serialize, Deserialize)]
 struct MovieInput {
     id: Option<String>,
@@ -44,17 +121,41 @@ struct MovieResponse {
     genre: String,
 }
 
+// Error response helper function
+fn error_response(
+    code: axum::http::StatusCode,
+    message: &str,
+) -> (axum::http::StatusCode, Json<Value>) {
+    (code, Json(json!({ "error": message })))
+}
 
-
+// CRUD handlers with metrics tracking
 async fn create_movie(
-    State(state): State<AppState>, 
+    State(state): State<Arc<Mutex<AppState>>>,
     Json(input): Json<MovieInput>,
 ) -> Result<impl IntoResponse, (axum::http::StatusCode, Json<Value>)> {
+    // Increment metrics
+    let metrics = state.lock().await.metrics.clone();
+    metrics.lock().await.inc_requests(Method::Post);
+
+    let tracer = global::tracer("movie_client/create_movie");
+    let span = tracer
+        .span_builder("CreateMovie")
+        .with_kind(SpanKind::Client)
+        .with_attributes([
+            KeyValue::new("component", "grpc"),
+            KeyValue::new("movie.title", input.title.clone()),
+            KeyValue::new("movie.genre", input.genre.clone()),
+        ])
+        .start(&tracer);
+    let cx = Context::current_with_span(span);
+
+    let state = state.lock().await;
     let mut client = state.grpc_client.lock().await;
 
     let movie_id = input.id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let request = Request::new(CreateMovieRequest { 
+    let mut request = Request::new(CreateMovieRequest {
         movie: Some(movie::Movie {
             id: movie_id.clone(),
             title: input.title,
@@ -62,60 +163,181 @@ async fn create_movie(
         }),
     });
 
-    match client.create_movie(request).await {
+    // Inject tracing context
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut MetadataMap(request.metadata_mut()))
+    });
+
+    let response_result = client.create_movie(request).await;
+
+    let status = match &response_result {
+        Ok(_) => "OK".to_string(),
+        Err(status) => status.code().to_string(),
+    };
+
+    cx.span().add_event(
+        "Create movie request completed",
+        vec![KeyValue::new("status", status.clone())],
+    );
+
+    match response_result {
         Ok(response) => {
             let movie = response.into_inner().movie.unwrap();
-            Ok(Json(json!({ "id": movie.id, "title": movie.title, "genre": movie.genre })))
+            Ok(Json(json!({
+                "id": movie.id,
+                "title": movie.title,
+                "genre": movie.genre
+            })))
         }
-        Err(status) => Err(error_response(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &status.to_string())),
+        Err(status) => Err(error_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            &status.to_string(),
+        )),
     }
 }
 
 async fn get_movie(
-    State(state): State<AppState>, 
+    State(state): State<Arc<Mutex<AppState>>>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, (axum::http::StatusCode, Json<Value>)> {
+    // Increment metrics
+    let metrics = state.lock().await.metrics.clone();
+    metrics.lock().await.inc_requests(Method::Get);
+
+    let tracer = global::tracer("movie_client/get_movie");
+    let span = tracer
+        .span_builder("GetMovie")
+        .with_kind(SpanKind::Client)
+        .with_attributes([
+            KeyValue::new("component", "grpc"),
+            KeyValue::new("movie.id", id.clone()),
+        ])
+        .start(&tracer);
+    let cx = Context::current_with_span(span);
+
+    let state = state.lock().await;
     let mut client = state.grpc_client.lock().await;
 
-    let request = Request::new(ReadMovieRequest { id });
+    let mut request = Request::new(ReadMovieRequest { id });
 
-    match client.get_movie(request).await {
+    // Inject tracing context
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut MetadataMap(request.metadata_mut()))
+    });
+
+    let response_result = client.get_movie(request).await;
+
+    let status = match &response_result {
+        Ok(_) => "OK".to_string(),
+        Err(status) => status.code().to_string(),
+    };
+
+    cx.span().add_event(
+        "Get movie request completed",
+        vec![KeyValue::new("status", status.clone())],
+    );
+
+    match response_result {
         Ok(response) => {
             let movie = response.into_inner().movie.unwrap();
-            Ok(Json(json!({ "id": movie.id, "title": movie.title, "genre": movie.genre })))
+            Ok(Json(json!({
+                "id": movie.id,
+                "title": movie.title,
+                "genre": movie.genre
+            })))
         }
-        Err(status) => Err(error_response(axum::http::StatusCode::NOT_FOUND, &status.to_string())),
+        Err(status) => Err(error_response(
+            axum::http::StatusCode::NOT_FOUND,
+            &status.to_string(),
+        )),
     }
 }
 
 async fn list_movies(
-    State(state): State<AppState>,
+    State(state): State<Arc<Mutex<AppState>>>,
 ) -> Result<impl IntoResponse, (axum::http::StatusCode, Json<Value>)> {
+    // Increment metrics
+    let metrics = state.lock().await.metrics.clone();
+    metrics.lock().await.inc_requests(Method::Get);
+
+    let tracer = global::tracer("movie_client/list_movies");
+    let span = tracer
+        .span_builder("ListMovies")
+        .with_kind(SpanKind::Client)
+        .with_attributes([KeyValue::new("component", "grpc")])
+        .start(&tracer);
+    let cx = Context::current_with_span(span);
+
+    let state = state.lock().await;
     let mut client = state.grpc_client.lock().await;
-    let request = Request::new(movie::ReadMoviesRequest {});
-    match client.get_movies(request).await {
+    let mut request = Request::new(movie::ReadMoviesRequest {});
+
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut MetadataMap(request.metadata_mut()))
+    });
+
+    let response_result = client.get_movies(request).await;
+
+    let _status = match &response_result {
+        Ok(response) => {
+            cx.span().add_event(
+                "List movies request completed",
+                vec![
+                    KeyValue::new("status", "OK"),
+                    KeyValue::new("movie_count", response.get_ref().movies.len() as i64),
+                ],
+            );
+            "OK".to_string()
+        }
+        Err(status) => status.code().to_string(),
+    };
+
+    match response_result {
         Ok(response) => {
             let movies: Vec<movie::Movie> = response.into_inner().movies;
-            let movie_responses: Vec<MovieResponse> = movies.into_iter().map(|movie| MovieResponse {
-                id: movie.id,
-                title: movie.title,
-                genre: movie.genre,
-                // Map other fields
-            }).collect();
+            let movie_responses: Vec<MovieResponse> = movies
+                .into_iter()
+                .map(|movie| MovieResponse {
+                    id: movie.id,
+                    title: movie.title,
+                    genre: movie.genre,
+                })
+                .collect();
             Ok(Json(serde_json::to_value(movie_responses).unwrap()))
         }
-        Err(status) => Err(error_response(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &status.to_string())),
+        Err(status) => Err(error_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            &status.to_string(),
+        )),
     }
 }
 
 async fn update_movie(
-    State(state): State<AppState>, 
+    State(state): State<Arc<Mutex<AppState>>>,
     Path(id): Path<String>,
     Json(input): Json<MovieInput>,
 ) -> Result<impl IntoResponse, (axum::http::StatusCode, Json<Value>)> {
+    // Increment metrics
+    let metrics = state.lock().await.metrics.clone();
+    metrics.lock().await.inc_requests(Method::Put);
+
+    let tracer = global::tracer("movie_client/update_movie");
+    let span = tracer
+        .span_builder("UpdateMovie")
+        .with_kind(SpanKind::Client)
+        .with_attributes([
+            KeyValue::new("component", "grpc"),
+            KeyValue::new("movie.id", id.clone()),
+            KeyValue::new("movie.title", input.title.clone()),
+            KeyValue::new("movie.genre", input.genre.clone()),
+        ])
+        .start(&tracer);
+    let cx = Context::current_with_span(span);
+
+    let state = state.lock().await;
     let mut client = state.grpc_client.lock().await;
 
-    let request = Request::new(UpdateMovieRequest { 
+    let mut request = Request::new(UpdateMovieRequest {
         movie: Some(movie::Movie {
             id,
             title: input.title,
@@ -123,53 +345,131 @@ async fn update_movie(
         }),
     });
 
-    match client.update_movie(request).await {
+    // Inject tracing context
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut MetadataMap(request.metadata_mut()))
+    });
+
+    let response_result = client.update_movie(request).await;
+
+    let status = match &response_result {
+        Ok(_) => "OK".to_string(),
+        Err(status) => status.code().to_string(),
+    };
+
+    cx.span().add_event(
+        "Update movie request completed",
+        vec![KeyValue::new("status", status.clone())],
+    );
+
+    match response_result {
         Ok(response) => {
             let movie = response.into_inner().movie.unwrap();
-            Ok(Json(json!({ "id": movie.id, "title": movie.title, "genre": movie.genre })))
+            Ok(Json(json!({
+                "id": movie.id,
+                "title": movie.title,
+                "genre": movie.genre
+            })))
         }
-        Err(status) => Err(error_response(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &status.to_string())),
+        Err(status) => Err(error_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            &status.to_string(),
+        )),
     }
 }
 
 async fn delete_movie(
-    State(state): State<AppState>, 
+    State(state): State<Arc<Mutex<AppState>>>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, (axum::http::StatusCode, Json<Value>)> {
+    // Increment metrics
+    let metrics = state.lock().await.metrics.clone();
+    metrics.lock().await.inc_requests(Method::Delete);
+
+    let tracer = global::tracer("movie_client/delete_movie");
+    let span = tracer
+        .span_builder("DeleteMovie")
+        .with_kind(SpanKind::Client)
+        .with_attributes([
+            KeyValue::new("component", "grpc"),
+            KeyValue::new("movie.id", id.clone()),
+        ])
+        .start(&tracer);
+    let cx = Context::current_with_span(span);
+
+    let state = state.lock().await;
     let mut client = state.grpc_client.lock().await;
 
-    let request = Request::new(DeleteMovieRequest { id });
+    let mut request = Request::new(DeleteMovieRequest { id });
 
-    match client.delete_movie(request).await {
+    // Inject tracing context
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut MetadataMap(request.metadata_mut()))
+    });
+
+    let response_result = client.delete_movie(request).await;
+
+    let status = match &response_result {
+        Ok(_) => "OK".to_string(),
+        Err(status) => status.code().to_string(),
+    };
+
+    cx.span().add_event(
+        "Delete movie request completed",
+        vec![KeyValue::new("status", status.clone())],
+    );
+
+    match response_result {
         Ok(response) => Ok(Json(json!({ "success": response.into_inner().success }))),
-        Err(status) => Err(error_response(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &status.to_string())),
+        Err(status) => Err(error_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            &status.to_string(),
+        )),
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let grpc_client = MovieServiceClient::connect("http://[::1]:50051").await?;
-    
-    let state = AppState {
-        grpc_client: Arc::new(tokio::sync::Mutex::new(grpc_client)),
+    // Initialize tracer
+    let _provider = init_tracer();
+
+    // Initialize Prometheus metrics
+    let metrics = Metrics {
+        requests: Family::default(),
     };
 
+    // Create registry and register metrics
+    let mut registry = Registry::default();
+    registry.register(
+        "movie_requests",
+        "Total number of movie service requests",
+        metrics.requests.clone(),
+    );
+
+    // Connect to gRPC service
+    let grpc_client = MovieServiceClient::connect("http://[::1]:50051").await?;
+
+    // Prepare application state
+    let state = Arc::new(Mutex::new(AppState {
+        registry,
+        grpc_client: Arc::new(tokio::sync::Mutex::new(grpc_client)),
+        metrics: Arc::new(Mutex::new(metrics)),
+    }));
+
+    // Configure router with routes and metrics endpoint
     let app = Router::new()
-        .route("/movies", 
-            get(list_movies)
-            .post(create_movie)
-        )
-        .route("/movies/:id", 
-            get(get_movie)
-            .put(update_movie)
-            .delete(delete_movie)
+        .route("/metrics", get(metrics_handler))
+        .route("/movies", get(list_movies).post(create_movie))
+        .route(
+            "/movies/:id",
+            get(get_movie).put(update_movie).delete(delete_movie),
         )
         .with_state(state);
 
-   
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
-    println!("Server running on http://127.0.0.1:3000");
-    
+    // Bind and serve
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:5000").await?;
+    println!("Server running on http://127.0.0.1:5000");
+
     axum::serve(listener, app).await?;
 
     Ok(())
