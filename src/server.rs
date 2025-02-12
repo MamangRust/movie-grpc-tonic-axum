@@ -1,12 +1,11 @@
 use opentelemetry::{
     global,
     propagation::Extractor,
-    trace::{Span, SpanKind, Tracer},
+    trace::{Span, SpanKind, TraceError, Tracer},
 };
 use opentelemetry_sdk::{
-    propagation::TraceContextPropagator, runtime::Tokio, trace::TracerProvider,
+    trace::SdkTracerProvider, Resource,
 };
-use opentelemetry_stdout::SpanExporter;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tonic::{transport::Server, Request, Response, Status};
@@ -18,12 +17,11 @@ use movie::{
     ReadMoviesRequest, ReadMoviesResponse, UpdateMovieRequest, UpdateMovieResponse,
 };
 
-// Import the generated types
+
 pub mod movie {
     tonic::include_proto!("movie");
 }
 
-// Metadata extraction for OpenTelemetry
 struct MetadataMap<'a>(&'a tonic::metadata::MetadataMap);
 
 impl<'a> Extractor for MetadataMap<'a> {
@@ -42,18 +40,23 @@ impl<'a> Extractor for MetadataMap<'a> {
     }
 }
 
-// Initialize OpenTelemetry tracer
-fn init_tracer() -> TracerProvider {
-    global::set_text_map_propagator(TraceContextPropagator::new());
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(SpanExporter::default(), Tokio)
-        .build();
+fn init_tracer_provider() -> Result<opentelemetry_sdk::trace::SdkTracerProvider, TraceError> {
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+    
+        .with_tonic()
+        .build()?;
 
-    global::set_tracer_provider(provider.clone());
-    provider
+    Ok(SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(
+            Resource::builder()
+                .with_service_name("movie-server")
+                .build(),
+        )
+        .build())
 }
 
-// In-memory movie storage
+
 #[derive(Debug, Default, Clone)]
 struct MovieStore {
     movies: Arc<Mutex<HashMap<String, Movie>>>,
@@ -70,10 +73,9 @@ impl MovieService for MovieServiceImpl {
         &self,
         request: Request<CreateMovieRequest>,
     ) -> Result<Response<CreateMovieResponse>, Status> {
-        // Extract parent context and create span
         let parent_cx =
             global::get_text_map_propagator(|prop| prop.extract(&MetadataMap(request.metadata())));
-        let tracer = global::tracer("movie_service/create_movie");
+        let tracer = global::tracer("movie-server");
         let mut span = tracer
             .span_builder("CreateMovie")
             .with_kind(SpanKind::Server)
@@ -90,13 +92,12 @@ impl MovieService for MovieServiceImpl {
             .movie
             .ok_or(Status::invalid_argument("No movie provided"))?;
 
-        // Generate a UUID if no ID is provided
         if movie.id.is_empty() {
             movie.id = Uuid::new_v4().to_string();
             span.add_event(format!("Generated new movie ID: {}", movie.id), vec![]);
         }
 
-        // Insert the movie
+ 
         movies.insert(movie.id.clone(), movie.clone());
 
         span.add_event("Movie created successfully", vec![]);
@@ -111,7 +112,7 @@ impl MovieService for MovieServiceImpl {
         // Extract parent context and create span
         let parent_cx =
             global::get_text_map_propagator(|prop| prop.extract(&MetadataMap(request.metadata())));
-        let tracer = global::tracer("movie_service/get_movie");
+        let tracer = global::tracer("movie-server");
         let mut span = tracer
             .span_builder("GetMovie")
             .with_kind(SpanKind::Server)
@@ -142,7 +143,7 @@ impl MovieService for MovieServiceImpl {
     ) -> Result<Response<ReadMoviesResponse>, Status> {
         let parent_cx =
             global::get_text_map_propagator(|prop| prop.extract(&MetadataMap(request.metadata())));
-        let tracer = global::tracer("movie_service/get_movies");
+        let tracer = global::tracer("movie-server");
         let mut span = tracer
             .span_builder("GetMovies")
             .with_kind(SpanKind::Server)
@@ -165,10 +166,9 @@ impl MovieService for MovieServiceImpl {
         &self,
         request: Request<UpdateMovieRequest>,
     ) -> Result<Response<UpdateMovieResponse>, Status> {
-        // Extract parent context and create span
         let parent_cx =
             global::get_text_map_propagator(|prop| prop.extract(&MetadataMap(request.metadata())));
-        let tracer = global::tracer("movie_service/update_movie");
+        let tracer = global::tracer("movie-server");
         let mut span = tracer
             .span_builder("UpdateMovie")
             .with_kind(SpanKind::Server)
@@ -201,10 +201,9 @@ impl MovieService for MovieServiceImpl {
         &self,
         request: Request<DeleteMovieRequest>,
     ) -> Result<Response<DeleteMovieResponse>, Status> {
-        // Extract parent context and create span
         let parent_cx =
             global::get_text_map_propagator(|prop| prop.extract(&MetadataMap(request.metadata())));
-        let tracer = global::tracer("movie_service/delete_movie");
+        let tracer = global::tracer("movie-server");
         let mut span = tracer
             .span_builder("DeleteMovie")
             .with_kind(SpanKind::Server)
@@ -231,8 +230,9 @@ impl MovieService for MovieServiceImpl {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize OpenTelemetry tracer
-    let _provider = init_tracer();
+    let tracer_provider = init_tracer_provider().expect("Hello");
+
+    global::set_tracer_provider(tracer_provider.clone());
 
     let addr = "[::1]:50051".parse()?;
 

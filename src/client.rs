@@ -23,18 +23,16 @@ use uuid::Uuid;
 use opentelemetry::{
     global,
     propagation::Injector,
-    trace::{SpanKind, TraceContextExt, Tracer},
+    trace::{SpanKind, TraceContextExt, TraceError, Tracer},
     Context, KeyValue,
 };
-use opentelemetry_sdk::{propagation::TraceContextPropagator, runtime::Tokio, trace as sdktrace};
-use opentelemetry_stdout::SpanExporter;
+use opentelemetry_sdk::{ trace::SdkTracerProvider, Resource};
 
-// Protobuf generated code
+
 pub mod movie {
     tonic::include_proto!("movie");
 }
 
-// Metrics-related enums and structs
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelValue)]
 pub enum Method {
     Get,
@@ -48,7 +46,7 @@ pub struct MethodLabels {
     pub method: Method,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Metrics {
     requests: Family<MethodLabels, Counter>,
 }
@@ -66,15 +64,20 @@ pub struct AppState {
     pub metrics: Arc<Mutex<Metrics>>,
 }
 
-// Tracing initialization function
-fn init_tracer() -> sdktrace::TracerProvider {
-    global::set_text_map_propagator(TraceContextPropagator::new());
-    let provider = sdktrace::TracerProvider::builder()
-        .with_batch_exporter(SpanExporter::default(), Tokio)
-        .build();
+fn init_tracer_provider() -> Result<opentelemetry_sdk::trace::SdkTracerProvider, TraceError> {
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+    
+        .with_tonic()
+        .build()?;
 
-    global::set_tracer_provider(provider.clone());
-    provider
+    Ok(SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(
+            Resource::builder()
+                .with_service_name("movie-client")
+                .build(),
+        )
+        .build())
 }
 
 // Metadata map for trace context injection
@@ -90,7 +93,6 @@ impl<'a> Injector for MetadataMap<'a> {
     }
 }
 
-// Metrics handler for Prometheus
 pub async fn metrics_handler(State(state): State<Arc<Mutex<AppState>>>) -> impl IntoResponse {
     let state = state.lock().await;
     let mut buffer = String::new();
@@ -138,7 +140,7 @@ async fn create_movie(
     let metrics = state.lock().await.metrics.clone();
     metrics.lock().await.inc_requests(Method::Post);
 
-    let tracer = global::tracer("movie_client/create_movie");
+    let tracer = global::tracer("movie-client");
     let span = tracer
         .span_builder("CreateMovie")
         .with_kind(SpanKind::Client)
@@ -204,7 +206,7 @@ async fn get_movie(
     let metrics = state.lock().await.metrics.clone();
     metrics.lock().await.inc_requests(Method::Get);
 
-    let tracer = global::tracer("movie_client/get_movie");
+    let tracer = global::tracer("movie-client");
     let span = tracer
         .span_builder("GetMovie")
         .with_kind(SpanKind::Client)
@@ -260,7 +262,7 @@ async fn list_movies(
     let metrics = state.lock().await.metrics.clone();
     metrics.lock().await.inc_requests(Method::Get);
 
-    let tracer = global::tracer("movie_client/list_movies");
+    let tracer = global::tracer("movie-client");
     let span = tracer
         .span_builder("ListMovies")
         .with_kind(SpanKind::Client)
@@ -321,7 +323,7 @@ async fn update_movie(
     let metrics = state.lock().await.metrics.clone();
     metrics.lock().await.inc_requests(Method::Put);
 
-    let tracer = global::tracer("movie_client/update_movie");
+    let tracer = global::tracer("movie-client");
     let span = tracer
         .span_builder("UpdateMovie")
         .with_kind(SpanKind::Client)
@@ -382,11 +384,10 @@ async fn delete_movie(
     State(state): State<Arc<Mutex<AppState>>>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, (axum::http::StatusCode, Json<Value>)> {
-    // Increment metrics
     let metrics = state.lock().await.metrics.clone();
     metrics.lock().await.inc_requests(Method::Delete);
 
-    let tracer = global::tracer("movie_client/delete_movie");
+    let tracer = global::tracer("movie-client");
     let span = tracer
         .span_builder("DeleteMovie")
         .with_kind(SpanKind::Client)
@@ -402,7 +403,6 @@ async fn delete_movie(
 
     let mut request = Request::new(DeleteMovieRequest { id });
 
-    // Inject tracing context
     global::get_text_map_propagator(|propagator| {
         propagator.inject_context(&cx, &mut MetadataMap(request.metadata_mut()))
     });
@@ -430,15 +430,14 @@ async fn delete_movie(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracer
-    let _provider = init_tracer();
+    let tracer_provider = init_tracer_provider().expect("Hello");
 
-    // Initialize Prometheus metrics
+    global::set_tracer_provider(tracer_provider.clone());
+
     let metrics = Metrics {
         requests: Family::default(),
     };
 
-    // Create registry and register metrics
     let mut registry = Registry::default();
     registry.register(
         "movie_requests",
@@ -446,22 +445,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         metrics.requests.clone(),
     );
 
-    // Connect to gRPC service
     let grpc_client = MovieServiceClient::connect("http://[::1]:50051").await?;
 
-    // Prepare application state
     let state = Arc::new(Mutex::new(AppState {
         registry,
         grpc_client: Arc::new(tokio::sync::Mutex::new(grpc_client)),
         metrics: Arc::new(Mutex::new(metrics)),
     }));
 
-    // Configure router with routes and metrics endpoint
+
     let app = Router::new()
         .route("/metrics", get(metrics_handler))
         .route("/movies", get(list_movies).post(create_movie))
         .route(
-            "/movies/:id",
+            "/movies/{id}",
             get(get_movie).put(update_movie).delete(delete_movie),
         )
         .with_state(state);
