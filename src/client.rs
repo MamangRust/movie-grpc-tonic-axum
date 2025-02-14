@@ -8,14 +8,19 @@ use axum::{
 };
 use movie::movie_service_client::MovieServiceClient;
 use movie::{CreateMovieRequest, DeleteMovieRequest, ReadMovieRequest, UpdateMovieRequest};
-use prometheus_client::encoding::text::encode;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::registry::Registry;
+use prometheus_client::{encoding::text::encode, metrics::gauge::Gauge};
 use prometheus_client_derive_encode::{EncodeLabelSet, EncodeLabelValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::{
+    fs,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use sysinfo::System;
 use tokio::sync::Mutex;
 use tonic::Request;
 use uuid::Uuid;
@@ -26,11 +31,116 @@ use opentelemetry::{
     trace::{SpanKind, TraceContextExt, TraceError, Tracer},
     Context, KeyValue,
 };
-use opentelemetry_sdk::{ trace::SdkTracerProvider, Resource};
-
+use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};
 
 pub mod movie {
     tonic::include_proto!("movie");
+}
+
+fn get_thread_count(pid: usize) -> Option<i64> {
+    let path = format!("/proc/{}/status", pid);
+    if let Ok(contents) = fs::read_to_string(path) {
+        for line in contents.lines() {
+            if line.starts_with("Threads:") {
+                if let Some(thread_count) = line.split_whitespace().nth(1) {
+                    return thread_count.parse::<i64>().ok();
+                }
+            }
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone)]
+pub struct SystemMetrics {
+    pub memory_alloc_bytes: Gauge,
+    pub memory_sys_bytes: Gauge,
+    pub available_memory: Counter,
+    pub thread_usage: Gauge,
+    pub total_cpu_usage: Counter,
+    pub process_start_time: Gauge,
+}
+
+impl SystemMetrics {
+    pub fn new() -> Self {
+        let start_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+
+        let metrics = Self {
+            memory_alloc_bytes: Gauge::default(),
+            memory_sys_bytes: Gauge::default(),
+            available_memory: Counter::default(),
+            thread_usage: Gauge::default(),
+            total_cpu_usage: Counter::default(),
+            process_start_time: Gauge::default(),
+        };
+
+        metrics.process_start_time.set(start_time as i64);
+        metrics
+    }
+
+    pub fn register(&self, registry: &mut Registry) {
+        registry.register(
+            "process_memory_alloc_bytes",
+            "Current memory allocation in bytes",
+            self.memory_alloc_bytes.clone(),
+        );
+
+        registry.register(
+            "process_memory_sys_bytes",
+            "Total system memory in bytes",
+            self.memory_sys_bytes.clone(),
+        );
+
+        registry.register(
+            "process_memory_frees_total",
+            "Total Available Memory",
+            self.available_memory.clone(),
+        );
+
+        registry.register(
+            "process_thread_total",
+            "Thread total",
+            self.thread_usage.clone(),
+        );
+
+        registry.register(
+            "total_cpu_usage",
+            "Total cpu usage",
+            self.total_cpu_usage.clone(),
+        );
+
+        registry.register(
+            "process_start_time_seconds",
+            "Start time of the process since unix epoch in seconds",
+            self.process_start_time.clone(),
+        );
+    }
+
+    pub async fn update_metrics(&self) {
+        let mut sys = System::new_all();
+        sys.refresh_all();
+
+        let pid = std::process::id() as usize;
+
+        if let Some(process) = sys.process(sysinfo::Pid::from(pid)) {
+            let current_memory = process.memory() as i64;
+            self.memory_alloc_bytes.set(current_memory);
+            self.memory_sys_bytes.set(process.virtual_memory() as i64);
+
+            let available_memory = sys.available_memory() / 1_024;
+            self.available_memory.inc_by(available_memory);
+
+            let total_cpu_usage = sys.global_cpu_usage();
+            self.total_cpu_usage.inc_by(total_cpu_usage as u64);
+
+            if let Some(thread_count) = get_thread_count(pid) {
+                self.thread_usage.set(thread_count);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelValue)]
@@ -62,11 +172,11 @@ pub struct AppState {
     pub registry: Registry,
     pub grpc_client: Arc<tokio::sync::Mutex<MovieServiceClient<tonic::transport::Channel>>>,
     pub metrics: Arc<Mutex<Metrics>>,
+    pub system_metrics: Arc<SystemMetrics>,
 }
 
 fn init_tracer_provider() -> Result<opentelemetry_sdk::trace::SdkTracerProvider, TraceError> {
     let exporter = opentelemetry_otlp::SpanExporter::builder()
-    
         .with_tonic()
         .build()?;
 
@@ -123,7 +233,6 @@ struct MovieResponse {
     genre: String,
 }
 
-// Error response helper function
 fn error_response(
     code: axum::http::StatusCode,
     message: &str,
@@ -202,7 +311,6 @@ async fn get_movie(
     State(state): State<Arc<Mutex<AppState>>>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, (axum::http::StatusCode, Json<Value>)> {
-    // Increment metrics
     let metrics = state.lock().await.metrics.clone();
     metrics.lock().await.inc_requests(Method::Get);
 
@@ -347,7 +455,6 @@ async fn update_movie(
         }),
     });
 
-    // Inject tracing context
     global::get_text_map_propagator(|propagator| {
         propagator.inject_context(&cx, &mut MetadataMap(request.metadata_mut()))
     });
@@ -428,6 +535,14 @@ async fn delete_movie(
     }
 }
 
+pub async fn run_metrics_collector(system_metrics: Arc<SystemMetrics>) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+    loop {
+        interval.tick().await;
+        system_metrics.update_metrics().await;
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tracer_provider = init_tracer_provider().expect("Hello");
@@ -447,12 +562,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let grpc_client = MovieServiceClient::connect("http://[::1]:50051").await?;
 
+    let system_metrics = Arc::new(SystemMetrics::new());
+    system_metrics.register(&mut registry);
+
     let state = Arc::new(Mutex::new(AppState {
         registry,
         grpc_client: Arc::new(tokio::sync::Mutex::new(grpc_client)),
         metrics: Arc::new(Mutex::new(metrics)),
+        system_metrics: system_metrics.clone(),
     }));
 
+    tokio::spawn(run_metrics_collector(system_metrics));
 
     let app = Router::new()
         .route("/metrics", get(metrics_handler))

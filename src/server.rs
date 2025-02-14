@@ -42,7 +42,7 @@ impl<'a> Extractor for MetadataMap<'a> {
 
 fn init_tracer_provider() -> Result<opentelemetry_sdk::trace::SdkTracerProvider, TraceError> {
     let exporter = opentelemetry_otlp::SpanExporter::builder()
-    
+
         .with_tonic()
         .build()?;
 
@@ -97,7 +97,7 @@ impl MovieService for MovieServiceImpl {
             span.add_event(format!("Generated new movie ID: {}", movie.id), vec![]);
         }
 
- 
+
         movies.insert(movie.id.clone(), movie.clone());
 
         span.add_event("Movie created successfully", vec![]);
@@ -239,6 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let movie_service = MovieServiceImpl::default();
 
     println!("Movie Service listening on {}", addr);
+
 
     Server::builder()
         .add_service(movie::movie_service_server::MovieServiceServer::new(

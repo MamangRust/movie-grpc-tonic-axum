@@ -5,23 +5,24 @@
 ```bash
 docker run -d --name jaeger \
   -e COLLECTOR_OTLP_ENABLED=true \
-  -p 4317:4317 \  
-  -p 6831:6831/udp \  
-  -p 6832:6832/udp \  
-  -p 16686:16686 \ 
-  -p 14268:14268 \  
+  -p 4317:4317 \
+  -p 6831:6831/udp \
+  -p 6832:6832/udp \
+  -p 16686:16686 \
+  -p 14268:14268 \
   jaegertracing/all-in-one:latest
 
 docker run -d --name prometheus \
   --network=host \
-  -v $(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml \
+  -v "$(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml" \
   prom/prometheus
 
 docker run -d --name grafana \
+  --network=host \
   -p 3000:3000 \
   -e GF_SECURITY_ADMIN_PASSWORD=admin \
-  --network=host \
   grafana/grafana:latest
+
 ```
 
 
