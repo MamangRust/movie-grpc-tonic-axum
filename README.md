@@ -23,6 +23,18 @@ docker run -d --name grafana \
   -e GF_SECURITY_ADMIN_PASSWORD=admin \
   grafana/grafana:latest
 
+docker run -d \
+  --name otel-collector \
+  -p 4317:4317 \
+  -p 4318:4318 \
+  -p 13133:13133 \
+  -p 8889:8889 \
+  -v $(pwd)/otel-collector.yaml:/etc/otel-collector-config.yaml \
+  --restart unless-stopped \
+  otel/opentelemetry-collector-contrib:latest \
+  --config=/etc/otel-collector-config.yaml
+
+
 ```
 
 

@@ -25,13 +25,15 @@ use tokio::sync::Mutex;
 use tonic::Request;
 use uuid::Uuid;
 
+use opentelemetry_sdk::{propagation::TraceContextPropagator, trace as sdktrace};
 use opentelemetry::{
     global,
     propagation::Injector,
-    trace::{SpanKind, TraceContextExt, TraceError, Tracer},
+    trace::{SpanKind, TraceContextExt,  Tracer},
     Context, KeyValue,
 };
-use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};
+
+use opentelemetry_sdk:: Resource;
 
 pub mod movie {
     tonic::include_proto!("movie");
@@ -175,22 +177,30 @@ pub struct AppState {
     pub system_metrics: Arc<SystemMetrics>,
 }
 
-fn init_tracer_provider() -> Result<opentelemetry_sdk::trace::SdkTracerProvider, TraceError> {
+
+
+fn init_tracer() -> opentelemetry_sdk::trace::SdkTracerProvider {
+    global::set_text_map_propagator(TraceContextPropagator::new());
+
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
-        .build()?;
+        .build()
+        .expect("Failed to build OTLP exporter");
 
-    Ok(SdkTracerProvider::builder()
+    let provider = sdktrace::SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
         .with_resource(
             Resource::builder()
                 .with_service_name("movie-client")
                 .build(),
         )
-        .build())
+        .build();
+
+    global::set_tracer_provider(provider.clone());
+    provider
 }
 
-// Metadata map for trace context injection
+
 struct MetadataMap<'a>(&'a mut tonic::metadata::MetadataMap);
 
 impl<'a> Injector for MetadataMap<'a> {
@@ -545,7 +555,7 @@ pub async fn run_metrics_collector(system_metrics: Arc<SystemMetrics>) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let tracer_provider = init_tracer_provider().expect("Hello");
+    let tracer_provider = init_tracer();
 
     global::set_tracer_provider(tracer_provider.clone());
 
