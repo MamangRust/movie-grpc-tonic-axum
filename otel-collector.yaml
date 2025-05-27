@@ -6,17 +6,6 @@ receivers:
       http:
         endpoint: "0.0.0.0:4318"
 
-  jaeger:
-    protocols:
-      grpc:
-        endpoint: "0.0.0.0:14250"     
-      thrift_binary:
-        endpoint: "0.0.0.0:6832"      
-      thrift_compact:
-        endpoint: "0.0.0.0:6831"    
-      thrift_http:
-        endpoint: "0.0.0.0:14268"      
-
   prometheus:
     config:
       scrape_configs:
@@ -24,10 +13,11 @@ receivers:
           scrape_interval: 5s
           static_configs:
             - targets: ["localhost:8889"]
+
         - job_name: "movie-service"
           scrape_interval: 15s
           static_configs:
-            - targets: ["localhost:5000"]
+            - targets: ["movie-service:5000"]
               labels:
                 application: "movie-grpc-service"
 
@@ -36,7 +26,10 @@ processors:
 
 exporters:
   otlp:
-    endpoint: "otel-collector:4317"
+    endpoint: "jaeger:4317"  
+    tls:
+      insecure: true
+
   prometheus:
     endpoint: "0.0.0.0:8889"
 
@@ -47,16 +40,17 @@ extensions:
 
 service:
   extensions: [health_check, pprof, zpages]
+
   pipelines:
     traces:
-      receivers: [otlp, jaeger]
+      receivers: [otlp]
       processors: [batch]
       exporters: [otlp]
 
     metrics:
       receivers: [otlp, prometheus]
       processors: [batch]
-      exporters: [otlp, prometheus]  
+      exporters: [prometheus]
 
     logs:
       receivers: [otlp]

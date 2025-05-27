@@ -3,26 +3,38 @@ services:
     image: jaegertracing/all-in-one:latest
     container_name: jaeger-movie-tonic
     ports:
-      - "16686:16686"
-      - "14250:14250"       
+      - "16686:16686"       
+      - "14250:14250"         
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     restart: unless-stopped
+  
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter-tonic
+    network_mode: host
+    pid: "host"
+    restart: unless-stopped
+    command:
+      - '--path.rootfs=/host'
+    volumes:
+      - '/:/host:ro,rslave'
+
 
   prometheus:
     image: prom/prometheus
     container_name: prometheus-tonic
-    network_mode: host  
+    network_mode: host
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     restart: unless-stopped
-  
 
   grafana:
     image: grafana/grafana:latest
     container_name: grafana-tonic
     ports:
       - "3000:3000"
+    network_mode: host
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     restart: unless-stopped
@@ -31,10 +43,10 @@ services:
     image: otel/opentelemetry-collector-contrib:latest
     container_name: otel-collector-tonic
     ports:
-      - "4317:4317"  
-      - "4318:4318"  
-      - "13133:13133" 
-      - "8889:8889"   
+      - "4317:4317"   
+      - "4318:4318"    
+      - "13133:13133"  
+      - "8889:8889"    
     volumes:
       - ./otel-collector.yaml:/etc/otel-collector-config.yaml:ro
     command: ["--config=/etc/otel-collector-config.yaml"]

@@ -1,45 +1,18 @@
 ## Movie Axum dan Tonic
 
-## Running Jaeger, Prometheus and Grafana in Docker run
 
-```bash
-docker run -d --name jaeger \
-  -e COLLECTOR_OTLP_ENABLED=true \
-  -p 4317:4317 \
-  -p 6831:6831/udp \
-  -p 6832:6832/udp \
-  -p 16686:16686 \
-  -p 14268:14268 \
-  jaegertracing/all-in-one:latest
-
-docker run -d --name prometheus \
-  --network=host \
-  -v "$(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml" \
-  prom/prometheus
-
-docker run -d --name grafana \
-  --network=host \
-  -p 3000:3000 \
-  -e GF_SECURITY_ADMIN_PASSWORD=admin \
-  grafana/grafana:latest
-
-docker run -d \
-  --name otel-collector \
-  -p 4317:4317 \
-  -p 4318:4318 \
-  -p 13133:13133 \
-  -p 8889:8889 \
-  -v $(pwd)/otel-collector.yaml:/etc/otel-collector-config.yaml \
-  --restart unless-stopped \
-  otel/opentelemetry-collector-contrib:latest \
-  --config=/etc/otel-collector-config.yaml
-
-
-```
 
 
 ## Preview Grafana(Jaeger and Prometheus)
-<img src="./image/example.png" alt="preview"/>
+
+<img src="./image/example.png" alt="preview"/> <br />
+
+<img src="./image/jaeger.png" alt="preview"> <br />
+
+
+
+<img src="./image/node-exporter.png" alt="preview">
+
 
 ## Running Server Grpc
 ```bash

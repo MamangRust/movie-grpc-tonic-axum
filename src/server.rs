@@ -296,11 +296,19 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
     global::set_meter_provider(meter_provider.clone());
 
     let addr = "[::1]:50051".parse()?;
-
     let movie_service = MovieServiceImpl::default();
 
     println!("Movie Service listening on {}", addr);
 
+    // Jalankan server
+    Server::builder()
+        .add_service(movie::movie_service_server::MovieServiceServer::new(
+            movie_service,
+        ))
+        .serve(addr)
+        .await?;
+
+    // Shutdown setelah server selesai
     let mut shutdown_errors = Vec::new();
     if let Err(e) = tracer_provider.shutdown() {
         shutdown_errors.push(format!("tracer provider: {}", e));
@@ -316,18 +324,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
 
     if !shutdown_errors.is_empty() {
         return Err(format!(
-            "Failed to shutdown providers:{}",
+            "Failed to shutdown providers:\n{}",
             shutdown_errors.join("\n")
         )
         .into());
     }
-
-    Server::builder()
-        .add_service(movie::movie_service_server::MovieServiceServer::new(
-            movie_service,
-        ))
-        .serve(addr)
-        .await?;
 
     Ok(())
 }
