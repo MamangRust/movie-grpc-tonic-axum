@@ -8,6 +8,7 @@ use axum::{
 };
 use movie::movie_service_client::MovieServiceClient;
 use movie::{CreateMovieRequest, DeleteMovieRequest, ReadMovieRequest, UpdateMovieRequest};
+use opentelemetry_otlp::WithExportConfig;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::registry::Registry;
@@ -25,15 +26,15 @@ use tokio::sync::Mutex;
 use tonic::Request;
 use uuid::Uuid;
 
-use opentelemetry_sdk::{propagation::TraceContextPropagator, trace as sdktrace};
 use opentelemetry::{
     global,
     propagation::Injector,
-    trace::{SpanKind, TraceContextExt,  Tracer},
+    trace::{SpanKind, TraceContextExt, Tracer},
     Context, KeyValue,
 };
+use opentelemetry_sdk::{propagation::TraceContextPropagator, trace as sdktrace};
 
-use opentelemetry_sdk:: Resource;
+use opentelemetry_sdk::Resource;
 
 pub mod movie {
     tonic::include_proto!("movie");
@@ -177,13 +178,12 @@ pub struct AppState {
     pub system_metrics: Arc<SystemMetrics>,
 }
 
-
-
 fn init_tracer() -> opentelemetry_sdk::trace::SdkTracerProvider {
     global::set_text_map_propagator(TraceContextPropagator::new());
 
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
+        .with_endpoint("http://localhost:4317")
         .build()
         .expect("Failed to build OTLP exporter");
 
@@ -199,7 +199,6 @@ fn init_tracer() -> opentelemetry_sdk::trace::SdkTracerProvider {
     global::set_tracer_provider(provider.clone());
     provider
 }
-
 
 struct MetadataMap<'a>(&'a mut tonic::metadata::MetadataMap);
 

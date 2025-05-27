@@ -1,50 +1,41 @@
-version: '3.8'
 services:
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yaml:/etc/prometheus/prometheus.yml
-    restart: unless-stopped
-
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
-    command: ["--config=/etc/otel-collector-config.yaml"]
-    volumes:
-      - ./otel-collector.yaml:/etc/otel-collector-config.yaml
-    ports:
-      - "4317:4317"     
-      - "4318:4318"      
-      - "13133:13133"
-      - "8889:8889"
-    restart: unless-stopped
-
   jaeger:
     image: jaegertracing/all-in-one:latest
-    container_name: jaeger
+    container_name: jaeger-movie-tonic
+    ports:
+      - "16686:16686"
+      - "14250:14250"       
     environment:
       - COLLECTOR_OTLP_ENABLED=true
-    ports:
-      - "4317:4317"  
-      - "4318:4318"   
-      - "6831:6831/udp" 
-      - "6832:6832/udp"
-      - "16686:16686"    
-      - "14268:14268"   
     restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus-tonic
+    network_mode: host  
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    restart: unless-stopped
+  
 
   grafana:
     image: grafana/grafana:latest
+    container_name: grafana-tonic
     ports:
       - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
-    depends_on:
-      - prometheus
-      - jaeger
     restart: unless-stopped
 
-networks:
-  default:
-    driver: bridge
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector-tonic
+    ports:
+      - "4317:4317"  
+      - "4318:4318"  
+      - "13133:13133" 
+      - "8889:8889"   
+    volumes:
+      - ./otel-collector.yaml:/etc/otel-collector-config.yaml:ro
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    restart: unless-stopped

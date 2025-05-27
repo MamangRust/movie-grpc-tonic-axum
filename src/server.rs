@@ -4,16 +4,16 @@ use opentelemetry::{
     trace::{Span, SpanKind, Tracer},
 };
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_otlp::{LogExporter, MetricExporter, SpanExporter};
+use opentelemetry_otlp::{LogExporter, MetricExporter, SpanExporter, WithExportConfig};
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
-use tracing_subscriber::prelude::*;
-use tracing_subscriber::EnvFilter;
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, error::Error, sync::OnceLock};
 use tonic::{transport::Server, Request, Response, Status};
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 use movie::{
@@ -61,6 +61,7 @@ impl Telemetry {
     pub fn init_tracer() -> SdkTracerProvider {
         let exporter = SpanExporter::builder()
             .with_tonic()
+            .with_endpoint("http://localhost:4317")
             .build()
             .expect("Failed to create span exporter");
         SdkTracerProvider::builder()
@@ -72,6 +73,7 @@ impl Telemetry {
     pub fn init_meter() -> SdkMeterProvider {
         let exporter = MetricExporter::builder()
             .with_tonic()
+            .with_endpoint("http://localhost:4317")
             .build()
             .expect("Failed to create metric exporter");
 
@@ -84,6 +86,7 @@ impl Telemetry {
     pub fn init_logger() -> SdkLoggerProvider {
         let exporter = LogExporter::builder()
             .with_tonic()
+            .with_endpoint("http://localhost:4317")
             .build()
             .expect("Failed to create log exporter");
 
