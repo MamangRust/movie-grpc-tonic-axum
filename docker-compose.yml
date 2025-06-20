@@ -4,8 +4,10 @@ services:
     container_name: movie-client
     restart: unless-stopped
     depends_on:
-      - otel-collector
-      - movie-server
+      otel-collector:
+        condition: service_started
+      movie-server:
+        condition: service_started
     ports:
       - 5000:5000
     environment:

@@ -295,7 +295,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
     global::set_tracer_provider(tracer_provider.clone());
     global::set_meter_provider(meter_provider.clone());
 
-    let addr = "[::1]:50051".parse()?;
+    let addr = "0.0.0.0:50051".parse()?;
     let movie_service = MovieServiceImpl::default();
 
     println!("Movie Service listening on {}", addr);

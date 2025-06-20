@@ -31,6 +31,7 @@ uuid = { version = "1.13.1", features = ["v4"] }
 tonic = "0.13.0"
 sysinfo = "0.34.2"
 opentelemetry-appender-tracing = "0.29.1"
+openssl = { version = "0.10.73", features = ["vendored"] }
 
 [build-dependencies]
 tonic-build = "0.13.0"
