@@ -592,9 +592,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_state(state);
 
-    // Bind and serve
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:5000").await?;
-    println!("Server running on http://127.0.0.1:5000");
+    
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:5000").await?;
+    println!("Server running on http://0.0.0.0:5000");
+
 
     axum::serve(listener, app).await?;
 

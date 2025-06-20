@@ -30,7 +30,7 @@ make run-client
 ### 1. List Movies
 
 ```bash
-curl -X GET http://127.0.0.1:5000/movies
+curl -X GET http://localhost:5000/movies
 ```
 
 ### 2. Create Movie
