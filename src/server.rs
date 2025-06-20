@@ -61,7 +61,7 @@ impl Telemetry {
     pub fn init_tracer() -> SdkTracerProvider {
         let exporter = SpanExporter::builder()
             .with_tonic()
-            .with_endpoint("http://localhost:4317")
+            .with_endpoint("http://otel-collector:4317")
             .build()
             .expect("Failed to create span exporter");
         SdkTracerProvider::builder()
@@ -73,7 +73,7 @@ impl Telemetry {
     pub fn init_meter() -> SdkMeterProvider {
         let exporter = MetricExporter::builder()
             .with_tonic()
-            .with_endpoint("http://localhost:4317")
+            .with_endpoint("http://otel-collector:4317")
             .build()
             .expect("Failed to create metric exporter");
 
@@ -86,7 +86,7 @@ impl Telemetry {
     pub fn init_logger() -> SdkLoggerProvider {
         let exporter = LogExporter::builder()
             .with_tonic()
-            .with_endpoint("http://localhost:4317")
+            .with_endpoint("http://otel-collector:4317")
             .build()
             .expect("Failed to create log exporter");
 
@@ -300,7 +300,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
 
     println!("Movie Service listening on {}", addr);
 
-    // Jalankan server
+
     Server::builder()
         .add_service(movie::movie_service_server::MovieServiceServer::new(
             movie_service,
@@ -308,7 +308,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         .serve(addr)
         .await?;
 
-    // Shutdown setelah server selesai
+
     let mut shutdown_errors = Vec::new();
     if let Err(e) = tracer_provider.shutdown() {
         shutdown_errors.push(format!("tracer provider: {}", e));

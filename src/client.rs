@@ -183,7 +183,7 @@ fn init_tracer() -> opentelemetry_sdk::trace::SdkTracerProvider {
 
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
-        .with_endpoint("http://localhost:4317")
+        .with_endpoint("http://otel-collector:4317")
         .build()
         .expect("Failed to build OTLP exporter");
 
@@ -569,7 +569,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         metrics.requests.clone(),
     );
 
-    let grpc_client = MovieServiceClient::connect("http://[::1]:50051").await?;
+    let grpc_client = MovieServiceClient::connect("http://movie-server:50051").await?;
 
     let system_metrics = Arc::new(SystemMetrics::new());
     system_metrics.register(&mut registry);

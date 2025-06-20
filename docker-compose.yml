@@ -1,4 +1,29 @@
 services:
+  movie-client:
+    image: ghcr.io/mamangrust/movie-client:latest
+    container_name: movie-client
+    restart: unless-stopped
+    depends_on:
+      - otel-collector
+      - movie-server
+    ports:
+      - 5000:5000
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    networks:
+      - app_movie_tonic
+
+  movie-server:
+    image: ghcr.io/mamangrust/movie-server:latest
+    container_name: movie-server
+    restart: unless-stopped
+    depends_on:
+      - otel-collector
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    networks:
+      - app_movie_tonic
+
   jaeger:
     image: jaegertracing/all-in-one:latest
     container_name: jaeger-movie-tonic
@@ -8,46 +33,51 @@ services:
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     restart: unless-stopped
-  
+    networks:
+      - app_movie_tonic
+
   node-exporter:
     image: prom/node-exporter:latest
     container_name: node-exporter-tonic
-    network_mode: host
-    pid: "host"
     restart: unless-stopped
     command:
       - '--path.rootfs=/host'
     volumes:
       - '/:/host:ro,rslave'
-
+    networks:
+      - app_movie_tonic
 
   prometheus:
     image: prom/prometheus
     container_name: prometheus-tonic
-    network_mode: host
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     restart: unless-stopped
+    networks:
+      - app_movie_tonic
 
   grafana:
     image: grafana/grafana:latest
     container_name: grafana-tonic
     ports:
       - "3000:3000"
-    network_mode: host
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     restart: unless-stopped
+    networks:
+      - app_movie_tonic
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     container_name: otel-collector-tonic
     ports:
-      - "4317:4317"   
-      - "4318:4318"    
-      - "13133:13133"  
-      - "8889:8889"    
+      - "4317:4317"
+      - "4318:4318"
+      - "13133:13133"
+      - "8889:8889"
     volumes:
       - ./otel-collector.yaml:/etc/otel-collector-config.yaml:ro
     command: ["--config=/etc/otel-collector-config.yaml"]
     restart: unless-stopped
+    networks:
+      - app_movie_tonic
