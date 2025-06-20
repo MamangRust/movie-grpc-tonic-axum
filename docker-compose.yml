@@ -1,6 +1,6 @@
 services:
   movie-client:
-    image: ghcr.io/mamangrust/movie-client:latest
+    image: ghcr.io/mamangrust/movie-grpc-tonic-axum/movie-client:latest
     container_name: movie-client
     restart: unless-stopped
     depends_on:
@@ -14,7 +14,7 @@ services:
       - app_movie_tonic
 
   movie-server:
-    image: ghcr.io/mamangrust/movie-server:latest
+    image: ghcr.io/mamangrust/movie-grpc-tonic-axum/movie-server:latest
     container_name: movie-server
     restart: unless-stopped
     depends_on:
