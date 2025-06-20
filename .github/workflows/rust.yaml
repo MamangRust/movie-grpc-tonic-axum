@@ -10,7 +10,7 @@ on:
       - 'Dockerfile.*'
       - 'src/**'
       - 'Cargo.*'
-      - '.github/workflows/rust-docker.yml'
+      - '.github/workflows/rust.yml'
 
 jobs:
   docker:
@@ -35,7 +35,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.target.name }}
+          images: ghcr.io/mamangrust/movie-grpc-tonic-axum/${{ matrix.target.name }}
           tags: |
             type=ref,event=branch
             type=ref,event=tag
@@ -45,7 +45,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=${{ matrix.target.name }}
             org.opencontainers.image.description=Rust binary image for ${{ matrix.target.name }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/movie-grpc-tonic-axum
             org.opencontainers.image.licenses=MIT
 
       - name: Login to GitHub Container Registry
@@ -63,5 +63,5 @@ jobs:
           push: true
           tags: |
             ${{ steps.meta.outputs.tags }}
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.target.name }}:latest
+            ghcr.io/mamangrust/movie-grpc-tonic-axum/${{ matrix.target.name }}:latest
           labels: ${{ steps.meta.outputs.labels }}
