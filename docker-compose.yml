@@ -83,3 +83,8 @@ services:
     restart: unless-stopped
     networks:
       - app_movie_tonic
+
+
+networks:
+  app_movie_tonic:
+    driver: bridge
