@@ -1,10 +1,17 @@
 FROM rust:1.87 AS builder
 
+RUN apt-get update && apt-get install -y protobuf-compiler pkg-config libssl-dev
+
 WORKDIR /app
 COPY . .
+
 RUN cargo build --release --bin movie-server
 
 FROM debian:bullseye-slim
+
 WORKDIR /app
 COPY --from=builder /app/target/release/movie-server .
+
+EXPOSE 50051
+
 CMD ["./movie-server"]

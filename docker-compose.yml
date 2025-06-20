@@ -17,6 +17,8 @@ services:
     image: ghcr.io/mamangrust/movie-grpc-tonic-axum/movie-server:latest
     container_name: movie-server
     restart: unless-stopped
+    ports:
+      - 50051:50051
     depends_on:
       - otel-collector
     environment:
