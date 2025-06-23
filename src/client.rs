@@ -229,21 +229,21 @@ pub async fn metrics_handler(State(state): State<Arc<Mutex<AppState>>>) -> impl 
         .unwrap()
 }
 
-// Existing input and response structs
 #[derive(Serialize, Deserialize)]
-struct MovieInput {
+pub struct MovieInput {
     id: Option<String>,
     title: String,
     genre: String,
 }
 
 #[derive(Serialize, Deserialize)]
-struct MovieResponse {
+pub struct MovieResponse {
     id: String,
     title: String,
     genre: String,
 }
 
+#[derive(Debug)]
 pub struct MovieService {
     grpc_client: Arc<Mutex<MovieServiceClient<Channel>>>,
     metrics: Arc<Mutex<Metrics>>,
