@@ -3,15 +3,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// fn main() -> Result<(), Box<dyn std::error::Error>> {
-//     let protos = [
-//         "proto/movie.proto",
-//         "proto/user.proto",
-//         "proto/auth.proto",
-//     ];
-
-//     tonic_build::configure()
-//         .compile_protos(&protos, &["proto/"])?; 
-
-//     Ok(())
-// }
